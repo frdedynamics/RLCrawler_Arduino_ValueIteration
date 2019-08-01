@@ -18,9 +18,6 @@ int vel = 0;
 int vel_dt = 10; // dt in milliseconds for differentiate the wheel velocity from the rot_encoder position 
 int waitforservos = 70; // wait until the servos moved to new postion in milliseconds
 
-float delta_q = 0;
-float max_q = 0;
-int max_q_index = 0;
 float reward =0;
 int action; //up=0; down=1; backwards=2; forwards=3;
 
@@ -28,22 +25,26 @@ int gwS1 = 0; //gridworld state of Servo 1
 int gwS2 = 0; //gridworld state of Servo 2
 int newgwS1 = 0;
 int newgwS2 = 0;
-float Q_currentState[4] = {0, 0, 0, 0};    
+int VigwS1 = 0;
+int VigwS2 = 0;
+int newVigwS1 = 0;
+int newVigwS2 = 0;
+int ViAction = 0;
+float Vcandidates[4] = {0, 0, 0, 0};
+float Vmax = 0;    
+int policyentry = 0;
 int movedir;
 float del;
 
-int Q_init = 0; //Multiplicaton Factor to initialize QMATRIX
+int V_init = 0; //Multiplicaton Factor to initialize QMATRIX
 float e_greed = 50;//93; // factor for  e-greedy action selection in range from 0-99; balance between exploration & exploitation
 float e_greed_final = 90; //98
 float e_greed_step = 0.015; //value with which the e_greed factor is increased in each iteration. This way exploring at the beginning and exploitation at the end can be achieved.
-float alpha = 0.3; //0.85 // Learn rate: Low-pass filter for changes of the entries of the q-matrix in presence of q-value update
-//float alpha_final = 0.5;
-//float alpha_step = 0.0005;
 float gamma = 0.8; // 0.5 at 9states worked 0.7 //discount factor of Q-value of next state
 
 bool go_backwards = true;
 
-#define TWENTYFIVE_STATES
+#define TWENTYFIVE_STATES // Comment this line out to use 3x3 State space
 #ifdef TWENTYFIVE_STATES
 #define N_STATES     int n_states[2] = {5, 5}; //{Servo1, Servo2}
 
@@ -59,7 +60,9 @@ bool go_backwards = true;
                                             {15, 16, 17, 18, 19}, \
                                             {20, 21, 22, 23, 24}}; //gridworld indices to state number 
 
-#define QMATRIX float Q[25][4] = {{1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}};
+#define VALUETABLE float V[5][5] = {{1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}};
+#define REWARDTABLE float R[5][5][4] = {{{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}};
+#define POLICY int P[5][5] = {{1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}};
 #else
 #define N_STATES     int n_states[2] = {3, 3};//{Servo1, Servo2} 
 #define SERVOPOS     int servopos[3][2] = {{85, 30}, \
@@ -68,12 +71,17 @@ bool go_backwards = true;
 #define GW2STATE     int gw2state[3][3] = {{0, 1, 2}, \
                                             {3, 4, 5}, \
                                             {6, 7, 8}};
-#define QMATRIX float Q[9][4] = {{1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}, {1, 1, 1, 1}};
+#define VALUETABLE float V[3][3] = {{1, 1, 1}, {1, 1, 1}, {1, 1, 1}};
+#define REWARDTABLE float R[3][3][4] = {{{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}};
+#define POLICY int P[5][5] = {{1, 1, 1}, {1, 1, 1}, {1, 1, 1}};
 #endif
 N_STATES
 SERVOPOS
 GW2STATE
-QMATRIX
+VALUETABLE
+REWARDTABLE
+POLICY
+
 
 void setup() {  
 
@@ -81,7 +89,8 @@ void setup() {
   {
     for (i = 0; i < 4; i++)
     {
-      Q[h][i] = Q[h][i] * Q_init;
+      V[h][i] = V[h][i] * V_init; // Initialize Value table
+      P[h][i] = P[h][i] * random(0, 4);
     }
   }
 
@@ -137,8 +146,22 @@ void loop() {
   DEBUG_PRINT("OLD STATE: "); DEBUG_PRINTLN(gw2state[gwS1][gwS2]);
   
 //Pick an action by e-greedy policy
-  for(i=0;i<4;i++){Q_currentState[i] = Q[gw2state[gwS1][gwS2]][i];}
-  action = e_greedy(e_greed, e_greed_final, e_greed_step, Q_currentState);
+if (e_greed <= (e_greed_final - e_greed_step)) { //Increase e_greedy value ofer time to exploit more after some learning
+        e_greed = e_greed + e_greed_step;
+      }
+      else {
+        e_greed = e_greed_final;
+      }
+      DEBUG_PRINT("e-Greed: "); DEBUG_PRINTLN(e_greed);
+          
+      //Exploration
+      if (random(0, 100) > e_greed){ 
+        action = random(0, 4);
+        DEBUG_PRINTLN("e-Greedy: Random Choice");
+      }
+      else { //Exploitation
+        action = P[gwS1][gwS2];
+      }
  
 //compute the new state reached by the picked action  
    action2state(gwS1, gwS2, newgwS1, newgwS2, n_states, action); 
@@ -224,29 +247,36 @@ void loop() {
 
   oldPosition = newPosition;  // Store current position for next iteration
 
-//decrease alpha over time to decrease the effect of Q value updates 
-  // if (alpha >= alpha_final + alpha_step) //Increase e_greedy value ofer time to exploit more after some learning
-  //   {
-  //     alpha = alpha - alpha_step;
-  //   }
-  // else {alpha = alpha_final;} 
-  
-//Q-Learning
-  max_q = Q[gw2state[newgwS1][newgwS2]][0];
-   for (i = 1; i < 4; i++) { //compute possible max q value of new state
-    if (Q[gw2state[newgwS1][newgwS2]][i] > max_q) {
-      max_q = Q[gw2state[newgwS1][newgwS2]][i];
+//Value iteration
+  for (VigwS1 = 0; VigwS1 < n_states[0] ; VigwS1++){
+    for (VigwS2 = 0; VigwS2 < n_states[1]; VigwS2++){
+
+      for (ViAction = 0; ViAction < 4; ViAction++){
+        action2state(VigwS1, VigwS2, newVigwS1, newVigwS2, n_states, ViAction);
+        Vcandidates[ViAction] =  R[VigwS1][VigwS2][ViAction] + gamma * V[newVigwS1][newVigwS2];
       }
-   }
-  delta_q = reward + (gamma * max_q) - Q[gw2state[gwS1][gwS2]][action];
-  Q[gw2state[gwS1][gwS2]][action] = Q[gw2state[gwS1][gwS2]][action] + alpha * delta_q;
-  
-  gwS2 = newgwS2; //Store new state for next iteration
+
+      Vmax = Vcandidates[0];
+      policyentry = 0;
+      for (i = 1; i < 4; i++){
+        if (Vcandidates[i] > Vmax){
+          Vmax = Vcandidates[i];
+          policyentry = i;
+        }     
+      }
+
+      V[VigwS1][VigwS2] = Vmax;
+      P[VigwS1][VigwS2] = policyentry;
+    }
+  }
+
+//Store new state for next iteration  
+  gwS2 = newgwS2; 
   gwS1 = newgwS1;
   
   for (h=0; h < (n_states[0]*n_states[1]); h++){
     for(i=0;i<4;i++){
-      DEBUG_PRINT(Q[h][i]);
+      DEBUG_PRINT(V[h][i]);
       DEBUG_PRINT(", ");
     }
     DEBUG_PRINTLN();
