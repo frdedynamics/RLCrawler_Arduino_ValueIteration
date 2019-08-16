@@ -10,6 +10,7 @@ Servo S1, S2;
 Encoder rot_encoder(2, 3); //avoid using pins with LEDs attached
 
 int h,i,j,k=0;
+long iteration_cnt = 0;
 long oldPosition  = 0;
 volatile long newPosition;
 long newPosition_hold = 0;
@@ -37,12 +38,13 @@ int movedir;
 float del;
 
 int V_init = 0; //Multiplicaton Factor to initialize QMATRIX
-float e_greed = 50;//93; // factor for  e-greedy action selection in range from 0-99; balance between exploration & exploitation
+float e_greed = 90;//93; // factor for  e-greedy action selection in range from 0-99; balance between exploration & exploitation
 float e_greed_final = 90; //98
 float e_greed_step = 0.015; //value with which the e_greed factor is increased in each iteration. This way exploring at the beginning and exploitation at the end can be achieved.
-float gamma = 0.8; // 0.5 at 9states worked 0.7 //discount factor of Q-value of next state
+float gamma = 0.95; // 0.5 at 9states worked 0.7 //discount factor of Q-value of next state
+float newRweight = 0.3;
 
-bool go_backwards = true;
+bool go_backwards = false;
 
 #define TWENTYFIVE_STATES // Comment this line out to use 3x3 State space
 #ifdef TWENTYFIVE_STATES
@@ -62,6 +64,7 @@ bool go_backwards = true;
 
 #define VALUETABLE float V[5][5] = {{1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}};
 #define REWARDTABLE float R[5][5][4] = {{{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}};
+//#define REWARDTABLE float R[5][5][4] = {{{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}}, {{0, 0, -100, -100}, {0, 0, 100, -100}, {0, 0, 100, -100}, {0, 0, 100, -100}, {0, 0, 100, -100}}};
 #define POLICY int P[5][5] = {{1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}, {1, 1, 1, 1, 1}};
 #else
 #define N_STATES     int n_states[2] = {3, 3};//{Servo1, Servo2} 
@@ -84,15 +87,6 @@ POLICY
 
 
 void setup() {  
-
-  for (h = 0; h < (n_states[0] * n_states[1]); h++)
-  {
-    for (i = 0; i < 4; i++)
-    {
-      V[h][i] = V[h][i] * V_init; // Initialize Value table
-      P[h][i] = P[h][i] * random(0, 4);
-    }
-  }
 
   S1.attach(6); //range 20 to 180
   S2.attach(5); //range 10 to 150; 90 is 45degree up-forward; 150 is forward-down; 10 is backwards-up 
@@ -126,6 +120,22 @@ void setup() {
   Serial1.print("Random Seed: ");
   Serial1.println(abs(rnd_seed));
 
+  for (h = 0; h < n_states[0]; h++){
+    for (i = 0; i < n_states[1]; i++){
+      V[h][i] = V[h][i] * V_init; //random(1, 10); // Initialize Value table
+      P[h][i] = P[h][i] * random(0, 4); // Initialize Policy Table
+    }
+  }
+
+DEBUG_PRINTLN("Policy:");
+  for (h=0; h < (n_states[0]); h++){
+    for(i=0;i < n_states[1]; i++){
+      DEBUG_PRINT(P[h][i]);
+      DEBUG_PRINT(", ");
+    }
+    DEBUG_PRINTLN();
+  }
+
   gwS1 = random(0, n_states[0]);
   gwS2 = random(0, n_states[1]); //random initial state
   Serial1.print("Random initial state: ");
@@ -136,14 +146,15 @@ void setup() {
   Serial1.print("g1: "); 
   Serial1.print(gwS1);
   Serial1.print("g2: "); 
-  Serial1.print(gwS2);
+  Serial1.println(gwS2);
   newPosition_hold = rot_encoder.read();
 }
 
 void loop() {
-  
+
+ 
   DEBUG_PRINTLN("****************");
-  DEBUG_PRINT("OLD STATE: "); DEBUG_PRINTLN(gw2state[gwS1][gwS2]);
+  DEBUG_PRINT("OLD STATE: "); DEBUG_PRINT(gwS1);  DEBUG_PRINT(", "); DEBUG_PRINTLN(gwS2); //DEBUG_PRINTLN(gw2state[gwS1][gwS2]);
   
 //Pick an action by e-greedy policy
 if (e_greed <= (e_greed_final - e_greed_step)) { //Increase e_greedy value ofer time to exploit more after some learning
@@ -162,10 +173,11 @@ if (e_greed <= (e_greed_final - e_greed_step)) { //Increase e_greedy value ofer 
       else { //Exploitation
         action = P[gwS1][gwS2];
       }
- 
+      DEBUG_PRINT("Action: "); DEBUG_PRINTLN(action);
+
 //compute the new state reached by the picked action  
    action2state(gwS1, gwS2, newgwS1, newgwS2, n_states, action); 
-      DEBUG_PRINT("NEW STATE: ");DEBUG_PRINTLN(gw2state[newgwS1][newgwS2]);
+      DEBUG_PRINT("NEW STATE: "); DEBUG_PRINT(newgwS1);  DEBUG_PRINT(", "); DEBUG_PRINTLN(newgwS2); //DEBUG_PRINTLN(gw2state[newgwS1][newgwS2]);
     //DEBUG_PRINT("ng1: ");DEBUG_PRINTLN(newgwS1);
     //DEBUG_PRINT("ng2: ");DEBUG_PRINTLN(newgwS2);    
   
@@ -183,9 +195,9 @@ if (e_greed <= (e_greed_final - e_greed_step)) { //Increase e_greedy value ofer 
       S1.write(servopos[gwS1][0] - i);
     }
 
-    if (abs(servopos[newgwS1][0] - servopos[gwS1][0]) - i <= 12 && abs(servopos[newgwS1][0] - servopos[gwS1][0]) - i >= 1)
+    if (abs(servopos[newgwS1][0] - servopos[gwS1][0]) - i <= 25 && abs(servopos[newgwS1][0] - servopos[gwS1][0]) - i >= 1)
     {
-      del = ((55.0 / 12.0) / 12.0) * (k * k); // ((final_delay/delta_steps)/delta_steps)*step^2
+      del = ((25.0 / 25.0) / 25.0) * ((k+5) * (k+5)); // ((final_delay/delta_steps)/delta_steps)*step^2
       k++;
     }
     else
@@ -210,7 +222,7 @@ if (e_greed <= (e_greed_final - e_greed_step)) { //Increase e_greedy value ofer 
     delay((int)del);
   }
   ////delay(waitforservos);
-
+delay(100);
 //Measure change in Position with the rotary encoder
    k=0;
    ms_hold = millis();
@@ -228,7 +240,7 @@ if (e_greed <= (e_greed_final - e_greed_step)) { //Increase e_greedy value ofer 
           if(abs(vel) < 300) 
           {
            newPosition_hold = newPosition;
-           Serial1.println("BREAK");
+           //Serial1.println("BREAK");
            break;
           }
           
@@ -240,10 +252,32 @@ if (e_greed <= (e_greed_final - e_greed_step)) { //Increase e_greedy value ofer 
 //Observe Reward
   reward = newPosition - oldPosition;
   reward = reward * movedir; // Negate reward when moving backwards is selected
+  reward = (reward/100);
+  reward = reward * reward * reward;
+  reward = reward - 20;
+  ///R[gwS1][gwS2][action] = reward;
+  R[gwS1][gwS2][action] = (1-newRweight) * R[gwS1][gwS2][action] + newRweight *  reward; // a Table with the immediate rewards is required for Val.It..  
+  //So the rewards for actions are stored in a table and updated throug a lowpass filter in each iteration
 
   DEBUG_PRINT("OLD POS: "); DEBUG_PRINTLN(oldPosition);
   DEBUG_PRINT("NEW POS: "); DEBUG_PRINTLN(newPosition);
   DEBUG_PRINT("REWARD: "); DEBUG_PRINTLN(reward);
+  //delay(1000);
+
+  for (i = 0; i < n_states[0]; i++)
+  {
+    for( j = 0; j < n_states[1]; j++)
+    {
+      DEBUG_PRINT("{");
+      for ( k = 0; k < 4; k++)
+      { 
+        DEBUG_PRINT(R[i][j][k]);
+        if (k < 3){DEBUG_PRINT(", ");}
+      }
+      DEBUG_PRINT("}, ");
+    }
+    DEBUG_PRINTLN();
+  }
 
   oldPosition = newPosition;  // Store current position for next iteration
 
@@ -273,16 +307,26 @@ if (e_greed <= (e_greed_final - e_greed_step)) { //Increase e_greedy value ofer 
 //Store new state for next iteration  
   gwS2 = newgwS2; 
   gwS1 = newgwS1;
-  
-  for (h=0; h < (n_states[0]*n_states[1]); h++){
-    for(i=0;i<4;i++){
+
+  DEBUG_PRINTLN("Value table:");
+  for (h=0; h < (n_states[0]); h++){
+    for(i=0;i < n_states[1]; i++){
       DEBUG_PRINT(V[h][i]);
       DEBUG_PRINT(", ");
     }
     DEBUG_PRINTLN();
   }
 
-DEBUG_PRINTLN(j); 
-j++; 
-//delay(300);
+DEBUG_PRINTLN("Policy:");
+  for (h=0; h < (n_states[0]); h++){
+    for(i=0;i < n_states[1]; i++){
+      DEBUG_PRINT(P[h][i]);
+      DEBUG_PRINT(", ");
+    }
+    DEBUG_PRINTLN();
+  }
+
+DEBUG_PRINTLN(iteration_cnt); 
+iteration_cnt++; 
+//delay(1000);
 }
